@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -44,25 +45,15 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout io.Wr
 	type shellQuery struct {
 		Cmd string `json:"cmd" description:"The shell command to execute."`
 	}
-
 	shellInfo := func(ctx context.Context, input shellQuery, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-		fmt.Fprintf(stdout, "SHELL -> %s\n", input.Cmd)
 		data, err := exec.Command("sh", "-c", input.Cmd).CombinedOutput()
 		if err != nil {
 			return fantasy.ToolResponse{}, err
 		}
 
-		out := string(data)
-		if !strings.HasSuffix(out, "\n") {
-			out += "\n"
-		}
-
-		fmt.Fprintf(stdout, "%s<- END OUTPUT\n", out)
-		return fantasy.NewTextResponse(out), nil
+		return fantasy.NewTextResponse(string(data)), nil
 	}
-
 	shellTool := fantasy.NewAgentTool("shell", "Execute shell commands.", shellInfo)
-
 	agent := fantasy.NewAgent(
 		model, fantasy.WithTools(shellTool),
 	)
@@ -70,19 +61,57 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout io.Wr
 	var messages []fantasy.Message
 	scanner := bufio.NewScanner(stdin)
 	for {
-		fmt.Fprint(stdout, "USER -> ")
+		fmt.Fprint(stdout, "-> USER: ")
 		if !scanner.Scan() {
 			break
 		}
 
 		prompt := scanner.Text()
-		result, err := agent.Generate(ctx, fantasy.AgentCall{Prompt: prompt, Messages: messages})
+		streamCall := fantasy.AgentStreamCall{
+			Prompt: prompt, Messages: messages,
+
+			OnTextStart: func(id string) error {
+				fmt.Fprint(stdout, "-> AGENT: ")
+				return nil
+			},
+			OnTextDelta: func(id, text string) error {
+				fmt.Fprint(stdout, text)
+				return nil
+			},
+			OnReasoningStart: func(id string, reasoning fantasy.ReasoningContent) error {
+				fmt.Fprint(stdout, "-> DRAFT: ")
+				return nil
+			},
+			OnReasoningDelta: func(id, text string) error {
+				fmt.Fprint(stdout, text)
+				return nil
+			},
+			OnToolCall: func(toolCall fantasy.ToolCallContent) error {
+				var query shellQuery
+				if err := json.Unmarshal([]byte(toolCall.Input), &query); err != nil {
+					return err
+				}
+
+				fmt.Fprintf(stdout, "-> SHELL: %s\n", query.Cmd)
+				return nil
+			},
+			OnToolResult: func(res fantasy.ToolResultContent) error {
+				text, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](res.Result)
+				if !ok {
+					return fmt.Errorf("unable to retrieve tool call result")
+				}
+				fmt.Fprintln(stdout, strings.TrimSuffix(text.Text, "\n"))
+
+				return nil
+			},
+		}
+		result, err := agent.Stream(ctx, streamCall)
 		if err != nil {
 			return err
 		}
 		messages = result.Steps[len(result.Steps)-1].Messages
 
-		fmt.Fprintf(stdout, "AGENT -> %s\n", result.Response.Content.Text())
+		fmt.Fprint(stdout, "\n")
 	}
 
 	return scanner.Err()
