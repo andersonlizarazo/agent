@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openai"
 	"charm.land/fantasy/providers/openaicompat"
 )
 
@@ -34,6 +35,9 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout io.Wr
 	if err != nil {
 		return err
 	}
+	providerOptions := openaicompat.NewProviderOptions(&openaicompat.ProviderOptions{
+		ReasoningEffort: openai.ReasoningEffortOption(openai.ReasoningEffortMedium),
+	})
 
 	ctx := context.Background()
 
@@ -55,7 +59,7 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout io.Wr
 	}
 	shellTool := fantasy.NewAgentTool("shell", "Execute shell commands.", shellInfo)
 	agent := fantasy.NewAgent(
-		model, fantasy.WithTools(shellTool),
+		model, fantasy.WithProviderOptions(providerOptions), fantasy.WithTools(shellTool),
 	)
 
 	var messages []fantasy.Message
@@ -84,6 +88,10 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout io.Wr
 			},
 			OnReasoningDelta: func(id, text string) error {
 				fmt.Fprint(stdout, text)
+				return nil
+			},
+			OnReasoningEnd: func(id string, reasoning fantasy.ReasoningContent) error {
+				fmt.Fprint(stdout, "\n")
 				return nil
 			},
 			OnToolCall: func(toolCall fantasy.ToolCallContent) error {
