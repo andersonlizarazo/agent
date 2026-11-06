@@ -22,6 +22,10 @@ const (
 )
 
 type Config struct {
+	Guardrail struct {
+		ShellTimeout        uint32 `toml:"shell_timeout"`
+		MaxShellOutputBytes uint32 `toml:"max_shell_output_bytes"`
+	} `toml:"guardrail"`
 	OpenAI struct {
 		ReasoningEffort openai.ReasoningEffort `toml:"reasoning_effort"`
 	} `toml:"openai"`

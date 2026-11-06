@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openaicompat"
@@ -62,9 +63,25 @@ func do(_ []string, getenv func(string) string, stdin io.Reader, stdout io.Write
 		Cmd string `json:"cmd" description:"The shell command to execute."`
 	}
 	shellInfo := func(ctx context.Context, input shellQuery, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-		data, err := exec.Command("sh", "-c", input.Cmd).CombinedOutput()
+		var cancel context.CancelFunc
+		if t := configDefault.Guardrail.ShellTimeout; t != 0 {
+			ctx, cancel = context.WithTimeout(ctx, time.Millisecond*time.Duration(t))
+			defer cancel()
+		}
+
+		data, err := exec.CommandContext(ctx, "sh", "-c", input.Cmd).CombinedOutput()
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fantasy.ToolResponse{}, fmt.Errorf("command took too much time executing: %w", ctxErr)
+			}
+
 			return fantasy.ToolResponse{}, err
+		}
+
+		if b := configDefault.Guardrail.MaxShellOutputBytes; b != 0 {
+			if size := len(data); size > int(b) {
+				return fantasy.ToolResponse{}, fmt.Errorf("output is too large: %d bytes", size)
+			}
 		}
 
 		return fantasy.NewTextResponse(string(data)), nil
