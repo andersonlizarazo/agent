@@ -30,13 +30,13 @@ func main() {
 	}
 }
 
-func do(args []string, getenv func(string) string, stdin io.Reader, stdout io.Writer) error {
+func do(_ []string, getenv func(string) string, stdin io.Reader, stdout io.Writer) error {
 	provider, err := openaicompat.New(openaicompat.WithBaseURL(getenv(ENV_OPENAI_BASE_URL)), openaicompat.WithAPIKey(getenv(ENV_OPENAI_API_KEY)))
 	if err != nil {
 		return err
 	}
 	providerOptions := openaicompat.NewProviderOptions(&openaicompat.ProviderOptions{
-		ReasoningEffort: openai.ReasoningEffortOption(openai.ReasoningEffortMedium),
+		ReasoningEffort: new(openai.ReasoningEffortMedium),
 	})
 
 	ctx := context.Background()
