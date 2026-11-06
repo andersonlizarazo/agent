@@ -2,7 +2,10 @@ module code.andersonlizarazo.com/agent
 
 go 1.27.3
 
-require charm.land/fantasy v0.45.5
+require (
+	charm.land/fantasy v0.45.5
+	github.com/BurntSushi/toml v1.6.0
+)
 
 require (
 	github.com/charmbracelet/openai-go v0.0.0-20260921175203-216db9e71b83 // indirect

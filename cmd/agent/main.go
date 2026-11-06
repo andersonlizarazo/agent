@@ -8,19 +8,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"charm.land/fantasy"
-	"charm.land/fantasy/providers/openai"
 	"charm.land/fantasy/providers/openaicompat"
-)
-
-const (
-	ENV_BASE                  = "AGENT_"
-	ENV_OPENAI                = ENV_BASE + "OPENAI_"
-	ENV_OPENAI_BASE_URL       = ENV_OPENAI + "BASE_URL"
-	ENV_OPENAI_API_KEY        = ENV_OPENAI + "API_KEY"
-	ENV_OPENAI_LANGUAGE_MODEL = ENV_OPENAI + "LANGUAGE_MODEL"
+	"code.andersonlizarazo.com/agent/config"
 )
 
 func main() {
@@ -31,17 +24,36 @@ func main() {
 }
 
 func do(_ []string, getenv func(string) string, stdin io.Reader, stdout io.Writer) error {
-	provider, err := openaicompat.New(openaicompat.WithBaseURL(getenv(ENV_OPENAI_BASE_URL)), openaicompat.WithAPIKey(getenv(ENV_OPENAI_API_KEY)))
+	configDir, err := config.Directory(getenv)
+	if err != nil {
+		return err
+	}
+
+	configDefaultData, err := os.ReadFile(filepath.Join(configDir, config.DefaultFile))
+	if err != nil {
+		return err
+	}
+	configPrivateData, err := os.ReadFile(filepath.Join(configDir, config.DefaultPrivateFile))
+	if err != nil {
+		return err
+	}
+
+	configDefault, configPrivate, err := config.LoadConfig(configDefaultData, configPrivateData)
+	if err != nil {
+		return err
+	}
+
+	provider, err := openaicompat.New(openaicompat.WithBaseURL(configPrivate.OpenAI.BaseURL), openaicompat.WithAPIKey(configPrivate.OpenAI.APIKey))
 	if err != nil {
 		return err
 	}
 	providerOptions := openaicompat.NewProviderOptions(&openaicompat.ProviderOptions{
-		ReasoningEffort: new(openai.ReasoningEffortMedium),
+		ReasoningEffort: new(configDefault.OpenAI.ReasoningEffort),
 	})
 
 	ctx := context.Background()
 
-	model, err := provider.LanguageModel(ctx, getenv(ENV_OPENAI_LANGUAGE_MODEL))
+	model, err := provider.LanguageModel(ctx, configPrivate.OpenAI.LanguageModel)
 	if err != nil {
 		return err
 	}
