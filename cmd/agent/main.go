@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,8 +88,17 @@ func do(_ []string, getenv func(string) string, stdin io.Reader, stdout io.Write
 		return fantasy.NewTextResponse(string(data)), nil
 	}
 	shellTool := fantasy.NewAgentTool("shell", "Execute shell commands.", shellInfo)
+
+	var systemPrompt string
+	if systemPromptDir := configDefault.Instruction.SystemPromptDir; systemPromptDir != "" {
+		systemPrompt, err = makeSystemPrompt(os.DirFS(systemPromptDir).(fs.ReadDirFS))
+		if err != nil {
+			return err
+		}
+	}
+
 	agent := fantasy.NewAgent(
-		model, fantasy.WithProviderOptions(providerOptions), fantasy.WithTools(shellTool),
+		model, fantasy.WithProviderOptions(providerOptions), fantasy.WithSystemPrompt(systemPrompt), fantasy.WithTools(shellTool),
 	)
 
 	var messages []fantasy.Message
@@ -152,4 +162,33 @@ func do(_ []string, getenv func(string) string, stdin io.Reader, stdout io.Write
 	}
 
 	return scanner.Err()
+}
+
+func makeSystemPrompt(directory fs.ReadDirFS) (string, error) {
+	entries, err := directory.ReadDir(".")
+	if err != nil {
+		return "", err
+	}
+
+	var prompt strings.Builder
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		file, err := directory.Open(entry.Name())
+		if err != nil {
+			return "", err
+		}
+		defer file.Close()
+
+		data, err := io.ReadAll(file)
+		if err != nil {
+			return "", err
+		}
+
+		prompt.WriteString(string(data))
+	}
+
+	return prompt.String(), nil
 }

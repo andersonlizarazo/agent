@@ -22,6 +22,9 @@ const (
 )
 
 type Config struct {
+	Instruction struct {
+		SystemPromptDir string `toml:"system_prompt_dir"`
+	}
 	Guardrail struct {
 		ShellTimeout        uint32 `toml:"shell_timeout"`
 		MaxShellOutputBytes uint32 `toml:"max_shell_output_bytes"`
