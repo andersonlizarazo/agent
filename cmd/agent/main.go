@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,10 +10,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/fantasy"
@@ -120,22 +123,63 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 			defer cancel()
 		}
 
-		data, err := exec.CommandContext(ctx, "sh", "-c", input.Cmd).CombinedOutput()
-		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return fantasy.ToolResponse{}, fmt.Errorf("command took too much time executing: %w", ctxErr)
-			}
+		cmd := exec.CommandContext(ctx, "sh", "-c", input.Cmd)
 
+		cmdOut, err := cmd.StdoutPipe()
+		if err != nil {
+			return fantasy.ToolResponse{}, err
+		}
+		cmdErr, err := cmd.StderrPipe()
+		if err != nil {
 			return fantasy.ToolResponse{}, err
 		}
 
-		if b := configDefault.Guardrail.MaxShellOutputBytes; b != 0 {
-			if size := len(data); size > int(b) {
-				return fantasy.ToolResponse{}, fmt.Errorf("output is too large: %d bytes", size)
-			}
+		if err := cmd.Start(); err != nil {
+			return fantasy.ToolResponse{}, err
 		}
 
-		return fantasy.NewTextResponse(string(data)), nil
+		outputBudget := int64(configDefault.Guardrail.MaxShellOutputBytes)
+		if outputBudget == 0 {
+			outputBudget = math.MaxInt64
+		}
+
+		var dataOut, dataErr []byte
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			dataOut, err = io.ReadAll(io.LimitReader(cmdOut, outputBudget))
+		})
+		wg.Go(func() {
+			dataErr, err = io.ReadAll(io.LimitReader(cmdErr, max(0, outputBudget-int64(len(dataOut))+1)))
+		})
+		wg.Wait()
+
+		if err != nil {
+			return fantasy.ToolResponse{}, err
+		}
+
+		outputBudget -= int64(len(dataOut)) + int64(len(dataErr))
+		if outputBudget < 0 && len(dataErr) > 0 {
+			dataErr = dataErr[:len(dataErr)-1-1]
+		}
+
+		output := string(dataOut)
+		if len(bytes.TrimSpace(dataErr)) != 0 {
+			output = strings.TrimSuffix(output, "\n") + "\n[stderr]\n" + string(dataErr)
+		}
+
+		if err := cmd.Wait(); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fantasy.ToolResponse{}, fmt.Errorf("%s\n[command took too much time executing: %w]", output, ctxErr)
+			}
+
+			return fantasy.ToolResponse{}, fmt.Errorf("%s\n[%w]", output, err)
+		}
+
+		if outputBudget < 0 {
+			return fantasy.ToolResponse{}, fmt.Errorf("%s\n[output is too large: more than %d bytes]", output, configDefault.Guardrail.MaxShellOutputBytes)
+		}
+
+		return fantasy.NewTextResponse(output), nil
 	}
 	shellTool := fantasy.NewAgentTool("shell", "Execute shell commands.", shellInfo)
 
