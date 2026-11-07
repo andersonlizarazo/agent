@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,13 +21,27 @@ import (
 )
 
 func main() {
-	if err := do(os.Args, os.Getenv, os.Stdin, os.Stdout); err != nil {
+	if err := do(os.Args, os.Getenv, os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
 	}
 }
 
-func do(_ []string, getenv func(string) string, stdin io.Reader, stdout io.Writer) error {
+func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) error {
+	flagSet := flag.NewFlagSet(filepath.Base(args[0]), flag.ContinueOnError)
+	flagSet.SetOutput(stderr)
+
+	var debugFlag string
+	flagSet.StringVar(&debugFlag, "debug", "", "print loaded configuration and exit")
+
+	err := flagSet.Parse(args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
 	configDir, err := config.Directory(getenv)
 	if err != nil {
 		return err
@@ -43,6 +59,30 @@ func do(_ []string, getenv func(string) string, stdin io.Reader, stdout io.Write
 	configDefault, configPrivate, err := config.LoadConfig(configDefaultData, configPrivateData)
 	if err != nil {
 		return err
+	}
+
+	var systemPrompt string
+	if systemPromptDir := configDefault.Instruction.SystemPromptDir; systemPromptDir != "" {
+		systemPrompt, err = makeSystemPrompt(os.DirFS(systemPromptDir).(fs.ReadDirFS))
+		if err != nil {
+			return err
+		}
+	}
+
+	switch debugFlag {
+	case "":
+		// Don't print debug info.
+	case "list":
+		fmt.Fprintln(stdout, strings.Join([]string{
+			"list",
+			"system-prompt",
+		}, "\t"))
+		return nil
+	case "system-prompt":
+		fmt.Fprint(stdout, systemPrompt)
+		return nil
+	default:
+		return fmt.Errorf("unknown debug flag: %q; use 'list' to show the defined flags", debugFlag)
 	}
 
 	provider, err := openaicompat.New(openaicompat.WithBaseURL(configPrivate.OpenAI.BaseURL), openaicompat.WithAPIKey(configPrivate.OpenAI.APIKey))
@@ -88,14 +128,6 @@ func do(_ []string, getenv func(string) string, stdin io.Reader, stdout io.Write
 		return fantasy.NewTextResponse(string(data)), nil
 	}
 	shellTool := fantasy.NewAgentTool("shell", "Execute shell commands.", shellInfo)
-
-	var systemPrompt string
-	if systemPromptDir := configDefault.Instruction.SystemPromptDir; systemPromptDir != "" {
-		systemPrompt, err = makeSystemPrompt(os.DirFS(systemPromptDir).(fs.ReadDirFS))
-		if err != nil {
-			return err
-		}
-	}
 
 	agent := fantasy.NewAgent(
 		model, fantasy.WithProviderOptions(providerOptions), fantasy.WithSystemPrompt(systemPrompt), fantasy.WithTools(shellTool),
