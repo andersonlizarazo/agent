@@ -31,8 +31,10 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 	flagSet := flag.NewFlagSet(filepath.Base(args[0]), flag.ContinueOnError)
 	flagSet.SetOutput(stderr)
 
-	var debugFlag string
+	var debugFlag, primeFlag string
+
 	flagSet.StringVar(&debugFlag, "debug", "", "print loaded configuration and exit")
+	flagSet.StringVar(&primeFlag, "prime", "", "prepend a 'prime' prompt in the first message")
 
 	err := flagSet.Parse(args[1:])
 	if errors.Is(err, flag.ErrHelp) {
@@ -63,7 +65,15 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 
 	var systemPrompt string
 	if systemPromptDir := configDefault.Instruction.SystemPromptDir; systemPromptDir != "" {
-		systemPrompt, err = makeSystemPrompt(os.DirFS(systemPromptDir).(fs.ReadDirFS))
+		systemPrompt, err = makePrompt(os.DirFS(systemPromptDir).(fs.ReadDirFS))
+		if err != nil {
+			return err
+		}
+	}
+
+	var primePrompt string
+	if primeFlag != "" {
+		primePrompt, err = makePrompt(os.DirFS(filepath.Join(configDefault.Instruction.PrimePromptsDir, primeFlag)).(fs.ReadDirFS))
 		if err != nil {
 			return err
 		}
@@ -133,6 +143,7 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 		model, fantasy.WithProviderOptions(providerOptions), fantasy.WithSystemPrompt(systemPrompt), fantasy.WithTools(shellTool),
 	)
 
+	isFirstPrompt := true
 	var messages []fantasy.Message
 	scanner := bufio.NewScanner(stdin)
 	for {
@@ -142,6 +153,11 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 		}
 
 		prompt := scanner.Text()
+		if isFirstPrompt {
+			prompt = primePrompt + prompt
+			isFirstPrompt = false
+		}
+
 		streamCall := fantasy.AgentStreamCall{
 			Prompt: prompt, Messages: messages,
 
@@ -196,7 +212,7 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 	return scanner.Err()
 }
 
-func makeSystemPrompt(directory fs.ReadDirFS) (string, error) {
+func makePrompt(directory fs.ReadDirFS) (string, error) {
 	entries, err := directory.ReadDir(".")
 	if err != nil {
 		return "", err

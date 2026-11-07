@@ -24,6 +24,7 @@ const (
 type Config struct {
 	Instruction struct {
 		SystemPromptDir string `toml:"system_prompt_dir"`
+		PrimePromptsDir string `toml:"prime_prompts_dir"`
 	}
 	Guardrail struct {
 		ShellTimeout        uint32 `toml:"shell_timeout"`
