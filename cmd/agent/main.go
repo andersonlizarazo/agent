@@ -144,7 +144,7 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 	)
 
 	isFirstPrompt := true
-	var messages []fantasy.Message
+	messages := make([]fantasy.Message, 0, 16)
 	scanner := bufio.NewScanner(stdin)
 	for {
 		fmt.Fprint(stdout, "-> USER: ")
@@ -152,14 +152,20 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 			break
 		}
 
-		prompt := scanner.Text()
+		prompt := strings.TrimSpace(scanner.Text())
+		if prompt == "" {
+			continue
+		}
+
 		if isFirstPrompt {
 			prompt = primePrompt + prompt
 			isFirstPrompt = false
 		}
 
+		messages = append(messages, fantasy.NewUserMessage(prompt))
+
 		streamCall := fantasy.AgentStreamCall{
-			Prompt: prompt, Messages: messages,
+			Messages: messages,
 
 			OnTextStart: func(id string) error {
 				fmt.Fprint(stdout, "-> AGENT: ")
@@ -204,7 +210,9 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 		if err != nil {
 			return err
 		}
-		messages = result.Steps[len(result.Steps)-1].Messages
+		for _, step := range result.Steps {
+			messages = append(messages, step.Messages...)
+		}
 
 		fmt.Fprint(stdout, "\n")
 	}
