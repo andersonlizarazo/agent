@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -140,43 +139,48 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 
 		outputBudget := int64(configDefault.Guardrail.MaxShellOutputBytes)
 		if outputBudget == 0 {
-			outputBudget = math.MaxInt64
+			// outputBudget = math.MaxInt64
+			outputBudget = 1024 * 1024 * 128 // TODO: Stream instead of reserving buffers.
 		}
 
-		var dataOut, dataErr []byte
+		dataOut := make([]byte, outputBudget)
+		dataErr := make([]byte, outputBudget)
+		var nOut, nErr int
+		var errOut, errErr error
 		var wg sync.WaitGroup
 		wg.Go(func() {
-			dataOut, err = io.ReadAll(io.LimitReader(cmdOut, outputBudget))
+			nOut, errOut = drainCommandOutput(cmdOut, dataOut)
 		})
 		wg.Go(func() {
-			dataErr, err = io.ReadAll(io.LimitReader(cmdErr, max(0, outputBudget-int64(len(dataOut))+1)))
+			nErr, errErr = drainCommandOutput(cmdErr, dataErr)
 		})
 		wg.Wait()
 
-		if err != nil {
-			return fantasy.ToolResponse{}, err
+		outputBudget -= int64(nOut)
+		output := string(dataOut[:nOut])
+		if errOut != nil {
+			output += addNewLine(output) + "[harness: cmd-error]: " + errOut.Error()
 		}
 
-		outputBudget -= int64(len(dataOut)) + int64(len(dataErr))
-		if outputBudget < 0 && len(dataErr) > 0 {
-			dataErr = dataErr[:len(dataErr)-1-1]
+		nErr = min(int(outputBudget), nErr)
+
+		if nErr != 0 && len(bytes.TrimSpace(dataErr[:nErr])) != 0 {
+			output = addNewLine(output) + "[harness: stderr]\n" + string(dataErr[:nErr])
+		}
+		if errErr != nil {
+			output = addNewLine(output) + "[harness: cmd-error]: " + errErr.Error()
 		}
 
-		output := string(dataOut)
-		if len(bytes.TrimSpace(dataErr)) != 0 {
-			output = strings.TrimSuffix(output, "\n") + "\n[stderr]\n" + string(dataErr)
+		if outputBudget == 0 {
+			output = addNewLine(output) + "[harness: tool output too large]"
 		}
 
 		if err := cmd.Wait(); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return fantasy.ToolResponse{}, fmt.Errorf("%s\n[command took too much time executing: %w]", output, ctxErr)
+				return fantasy.ToolResponse{}, fmt.Errorf("%s\n[harness: command took too much time executing: %w]", output, ctxErr)
 			}
 
 			return fantasy.ToolResponse{}, fmt.Errorf("%s\n[%w]", output, err)
-		}
-
-		if outputBudget < 0 {
-			return fantasy.ToolResponse{}, fmt.Errorf("%s\n[output is too large: more than %d bytes]", output, configDefault.Guardrail.MaxShellOutputBytes)
 		}
 
 		return fantasy.NewTextResponse(output), nil
@@ -291,4 +295,24 @@ func makePrompt(directory fs.ReadDirFS) (string, error) {
 	}
 
 	return prompt.String(), nil
+}
+
+func addNewLine(s string) string {
+	return strings.TrimSuffix(s, "\n") + "\n"
+}
+
+func drainCommandOutput(r io.Reader, buf []byte) (n int, err error) {
+	n, err = io.ReadFull(r, buf)
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return n, nil
+	}
+	if err != nil {
+		return n, err
+	}
+
+	if _, err = io.ReadAll(r); err != nil {
+		fmt.Fprintln(os.Stderr, "ignored error:", err)
+	}
+
+	return n, nil
 }
