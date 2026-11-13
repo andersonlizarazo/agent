@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,12 +13,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openaicompat"
 	"code.andersonlizarazo.com/agent/config"
+	"code.andersonlizarazo.com/agent/internal/commandline"
 )
 
 func main() {
@@ -122,68 +122,31 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 			defer cancel()
 		}
 
-		cmd := exec.CommandContext(ctx, "sh", "-c", input.Cmd)
-
-		cmdOut, err := cmd.StdoutPipe()
-		if err != nil {
-			return fantasy.ToolResponse{}, err
-		}
-		cmdErr, err := cmd.StderrPipe()
-		if err != nil {
-			return fantasy.ToolResponse{}, err
+		outputLimit := commandline.NoOutputLimit
+		if limit := configDefault.Guardrail.MaxShellOutputBytes; limit != 0 {
+			outputLimit = int64(limit)
 		}
 
-		if err := cmd.Start(); err != nil {
-			return fantasy.ToolResponse{}, err
-		}
-
-		outputBudget := int64(configDefault.Guardrail.MaxShellOutputBytes)
-		if outputBudget == 0 {
-			// outputBudget = math.MaxInt64
-			outputBudget = 1024 * 1024 * 128 // TODO: Stream instead of reserving buffers.
-		}
-
-		dataOut := make([]byte, outputBudget)
-		dataErr := make([]byte, outputBudget)
-		var nOut, nErr int
-		var errOut, errErr error
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			nOut, errOut = drainCommandOutput(cmdOut, dataOut)
-		})
-		wg.Go(func() {
-			nErr, errErr = drainCommandOutput(cmdErr, dataErr)
-		})
-		wg.Wait()
-
-		outputBudget -= int64(nOut)
-		output := string(dataOut[:nOut])
-		if errOut != nil {
-			output += addNewLine(output) + "[harness: cmd-error]: " + errOut.Error()
-		}
-
-		nErr = min(int(outputBudget), nErr)
-
-		if nErr != 0 && len(bytes.TrimSpace(dataErr[:nErr])) != 0 {
-			output = addNewLine(output) + "[harness: stderr]\n" + string(dataErr[:nErr])
-		}
-		if errErr != nil {
-			output = addNewLine(output) + "[harness: cmd-error]: " + errErr.Error()
-		}
-
-		if outputBudget == 0 {
-			output = addNewLine(output) + "[harness: tool output too large]"
-		}
-
-		if err := cmd.Wait(); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return fantasy.ToolResponse{}, fmt.Errorf("%s\n[harness: command took too much time executing: %w]", output, ctxErr)
+		var extraInfo string
+		var exitCode int
+		cmdStdout, cmdStdoutSize, cmdStderr, cmdStderrSize, err := commandline.Execute(ctx, []string{"sh", "-c", input.Cmd}, commandline.WithOutputLimit(outputLimit))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			extraInfo = ctxErr.Error()
+		} else if err != nil {
+			if e, ok := errors.AsType[*exec.ExitError](err); ok {
+				if ws, ok := e.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+					extraInfo = fmt.Sprintf("terminated by signal: %s", ws.Signal())
+				} else {
+					exitCode = e.ExitCode()
+				}
+			} else {
+				extraInfo = err.Error()
 			}
-
-			return fantasy.ToolResponse{}, fmt.Errorf("%s\n[%w]", output, err)
 		}
 
-		return fantasy.NewTextResponse(output), nil
+		response := makeCommandOutput(cmdStdout, int64(len(cmdStdout)) != cmdStdoutSize, cmdStderr, int64(len(cmdStderr)) != cmdStderrSize, exitCode, extraInfo)
+
+		return fantasy.NewTextResponse(response), nil
 	}
 	shellTool := fantasy.NewAgentTool("shell", "Execute shell commands.", shellInfo)
 
@@ -297,22 +260,41 @@ func makePrompt(directory fs.ReadDirFS) (string, error) {
 	return prompt.String(), nil
 }
 
-func addNewLine(s string) string {
-	return strings.TrimSuffix(s, "\n") + "\n"
+func makeCommandOutput(stdout string, stdoutTruncated bool, stderr string, stderrTruncated bool, exitCode int, extra string) string {
+	const truncatedMsg = "[harness: output was truncated]"
+
+	output := stdout
+	truncationReported := false
+	if stdoutTruncated {
+		output = addNewLine(output) + truncatedMsg
+		truncationReported = true
+	}
+
+	if len(stderr) != 0 {
+		output = addNewLine(output) + "[harness: stderr]\n" + stderr
+	}
+
+	if stderrTruncated && !truncationReported {
+		output = addNewLine(output) + truncatedMsg
+	}
+
+	if exitCode != 0 {
+		output = addNewLine(output) + fmt.Sprintf("[harness: exit code %d]", exitCode)
+	}
+
+	if len(extra) != 0 {
+		output = addNewLine(output) + fmt.Sprintf("[harness: %s]", extra)
+	}
+
+	return output
 }
 
-func drainCommandOutput(r io.Reader, buf []byte) (n int, err error) {
-	n, err = io.ReadFull(r, buf)
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return n, nil
-	}
-	if err != nil {
-		return n, err
+// addNewLine appends a newline while avoiding duplicates unless [s] is
+// empty.
+func addNewLine(s string) string {
+	if s == "" {
+		return ""
 	}
 
-	if _, err = io.ReadAll(r); err != nil {
-		fmt.Fprintln(os.Stderr, "ignored error:", err)
-	}
-
-	return n, nil
+	return strings.TrimSuffix(s, "\n") + "\n"
 }
