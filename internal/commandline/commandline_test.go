@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -52,6 +54,27 @@ func ExampleExecute_withOutputLimit_stderr() {
 	fmt.Println(stdout, stderr)
 
 	// Output: 1234 abcd
+}
+
+func TestExecuteWithWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, _, _, _, err := commandline.Execute(context.Background(), []string{"pwd", "-P"}, commandline.WithWorkingDirectory(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := strings.TrimSpace(stdout)
+	if got != want {
+		t.Errorf("got: %q, want: %q", got, want)
+	}
 }
 
 func ExampleExecute_withTee() {

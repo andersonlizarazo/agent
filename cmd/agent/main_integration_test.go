@@ -55,8 +55,8 @@ func TestBasicToolCall(t *testing.T) {
 			ToolCalls: []testserver.ToolCall{
 				{
 					ID:        "0",
-					Name:      "shell",
-					Arguments: `{"cmd": "echo hi"}`,
+					Name:      "command",
+					Arguments: `{"payload": ["echo", "hi"]}`,
 				},
 			},
 		},
@@ -94,8 +94,8 @@ func TestToolCallMaxBytes(t *testing.T) {
 			ToolCalls: []testserver.ToolCall{
 				{
 					ID:        "0",
-					Name:      "shell",
-					Arguments: `{"cmd": "echo 12345678"}`,
+					Name:      "command",
+					Arguments: `{"payload": ["echo", "12345678"]}`,
 				},
 			},
 		},
@@ -207,8 +207,8 @@ func TestToolCallTruncatedStderrNotice(t *testing.T) {
 			ToolCalls: []testserver.ToolCall{
 				{
 					ID:        "0",
-					Name:      "shell",
-					Arguments: `{"cmd": "sh -c 'printf 1234; printf ERROR >&2'"}`,
+					Name:      "command",
+					Arguments: `{"payload": ["sh", "-c", "printf 1234; printf ERROR >&2"]}`,
 				},
 			},
 		},
@@ -255,8 +255,8 @@ func TestToolCallSignalledChild(t *testing.T) {
 			ToolCalls: []testserver.ToolCall{
 				{
 					ID:        "0",
-					Name:      "shell",
-					Arguments: `{"cmd": "kill -9 $$"}`,
+					Name:      "command",
+					Arguments: `{"payload": ["sh", "-c", "kill -9 $$"]}`,
 				},
 			},
 		},
@@ -295,4 +295,50 @@ type toolCallRequest struct {
 		Content string `json:"content"`
 		Role    string `json:"role"`
 	} `json:"messages"`
+}
+
+// TestToolCallEmptyPayload pins the empty-argv case: when the model emits an
+// empty payload, the harness must answer with a clear message instead of a
+// recovered panic carrying a stack trace.
+func TestToolCallEmptyPayload(t *testing.T) {
+	t.Parallel()
+
+	server := testserver.New(
+		testserver.Reply{
+			ToolCalls: []testserver.ToolCall{
+				{
+					ID:        "0",
+					Name:      "command",
+					Arguments: `{"payload": []}`,
+				},
+			},
+		},
+	)
+	getenv := makeEnv(t, server.URL, config.Config{}, config.ConfigPrivate{})
+
+	if err := do([]string{"test-agent"}, getenv, bytes.NewBufferString("test"), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	requests := server.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("got: %d requests, want: %d", len(requests), 2)
+	}
+
+	var toolCall toolCallRequest
+	if err := json.Unmarshal(requests[1], &toolCall); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(toolCall.Messages) != 3 {
+		t.Fatalf("got: %d messages, want: %d", len(toolCall.Messages), 3)
+	}
+
+	gotToolAnswer := toolCall.Messages[2].Content
+	if !strings.Contains(gotToolAnswer, "payload") {
+		t.Errorf("got: %q, want it to name the empty payload", gotToolAnswer)
+	}
+	if strings.Contains(gotToolAnswer, "panicked") {
+		t.Errorf("got: %q, want no recovered panic in the tool answer", gotToolAnswer)
+	}
 }

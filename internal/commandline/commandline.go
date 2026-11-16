@@ -30,6 +30,8 @@ func Execute(ctx context.Context, command []string, opts ...ExecuteOption) (stdo
 
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 
+	cmd.Dir = executeOptions.workingDirectory
+
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", 0, "", 0, err
@@ -107,14 +109,21 @@ func drainWithLimit(buf *bytes.Buffer, pipe io.Reader, limit int64) (int64, erro
 type ExecuteOption func(*executeOption)
 
 type executeOption struct {
-	outputLimit int64
-	teeStdout   io.Writer
-	teeStderr   io.Writer
+	workingDirectory string
+	outputLimit      int64
+	teeStdout        io.Writer
+	teeStderr        io.Writer
 }
 
 func WithOutputLimit(limit int64) ExecuteOption {
 	return func(o *executeOption) {
 		o.outputLimit = limit
+	}
+}
+
+func WithWorkingDirectory(path string) ExecuteOption {
+	return func(o *executeOption) {
+		o.workingDirectory = path
 	}
 }
 
