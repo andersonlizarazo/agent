@@ -124,11 +124,11 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 		fantasy.WithSystemPrompt(systemPrompt),
 		fantasy.WithTools(
 			agentictools.MakeCommandTool(
-				cwd,
-				homeDir,
-				configDefault.CommandLine.Wrapper,
-				time.Duration(configDefault.Guardrail.ShellTimeout)*time.Millisecond,
-				configDefault.Guardrail.MaxShellOutputBytes,
+				agentictools.WithWorkingDirectory(cwd),
+				agentictools.WithHomeDirectory(homeDir),
+				agentictools.WithWrapper(configDefault.CommandLine.Wrapper),
+				agentictools.WithTimeout(time.Duration(configDefault.Guardrail.ShellTimeout)*time.Millisecond),
+				agentictools.WithMaxOutputBytes(configDefault.Guardrail.MaxShellOutputBytes),
 			),
 		),
 	)

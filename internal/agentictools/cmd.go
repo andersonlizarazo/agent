@@ -16,8 +16,61 @@ import (
 	"code.andersonlizarazo.com/agent/internal/commandline"
 )
 
-func MakeCommandTool(workingDirectory, homeDirectory string, wrapper []string, timeout time.Duration, maxOutputBytes uint32) fantasy.AgentTool {
-	return fantasy.NewAgentTool("command", fmt.Sprintf("execute the given command on %q", cleanPath(workingDirectory, homeDirectory)), makeCommandInfo(workingDirectory, wrapper, timeout, maxOutputBytes))
+// WithFn customizes the configuration of a tool at construction time.
+type WithFn func(*commandToolConfig)
+
+// commandToolConfig holds every knob the command tool reads; construct it
+// through [WithFn] options so no call site repeats positional arguments.
+type commandToolConfig struct {
+	workingDirectory string
+	homeDirectory    string
+	wrapper          []string
+	timeout          time.Duration
+	maxOutputBytes   uint32
+}
+
+// WithWorkingDirectory sets the directory the command runs in.
+func WithWorkingDirectory(path string) WithFn {
+	return func(c *commandToolConfig) {
+		c.workingDirectory = path
+	}
+}
+
+// WithHomeDirectory sets the directory displayed as `~` in the description.
+func WithHomeDirectory(path string) WithFn {
+	return func(c *commandToolConfig) {
+		c.homeDirectory = path
+	}
+}
+
+// WithWrapper sets the program that wraps every command, such as `bwrap`.
+func WithWrapper(wrapper []string) WithFn {
+	return func(c *commandToolConfig) {
+		c.wrapper = wrapper
+	}
+}
+
+// WithTimeout bounds each command; zero waits forever.
+func WithTimeout(timeout time.Duration) WithFn {
+	return func(c *commandToolConfig) {
+		c.timeout = timeout
+	}
+}
+
+// WithMaxOutputBytes caps each stream; zero keeps everything.
+func WithMaxOutputBytes(limit uint32) WithFn {
+	return func(c *commandToolConfig) {
+		c.maxOutputBytes = limit
+	}
+}
+
+func MakeCommandTool(options ...WithFn) fantasy.AgentTool {
+	config := commandToolConfig{}
+	for _, apply := range options {
+		apply(&config)
+	}
+
+	return fantasy.NewAgentTool("command", fmt.Sprintf("execute the given command on %q", cleanPath(config.workingDirectory, config.homeDirectory)), makeCommandInfo(config))
 }
 
 func cleanPath(path string, homeDir string) string {
@@ -48,20 +101,20 @@ type commandQuery struct {
 	Payload []string `json:"payload" description:"command & args"`
 }
 
-func makeCommandInfo(workingDirectory string, wrapper []string, commandTimeout time.Duration, maxCommandOutputBytes uint32) func(context.Context, commandQuery, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func makeCommandInfo(config commandToolConfig) func(context.Context, commandQuery, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	return func(ctx context.Context, query commandQuery, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		if len(query.Payload) == 0 {
 			return fantasy.NewTextResponse(makeCommandOutput("", false, "", false, 0, "payload must name a program to run")), nil
 		}
 
 		var cancel context.CancelFunc
-		if t := commandTimeout; t != 0 {
+		if t := config.timeout; t != 0 {
 			ctx, cancel = context.WithTimeout(ctx, t)
 			defer cancel()
 		}
 
 		outputLimit := commandline.NoOutputLimit
-		if limit := maxCommandOutputBytes; limit != 0 {
+		if limit := config.maxOutputBytes; limit != 0 {
 			outputLimit = int64(limit)
 		}
 
@@ -69,9 +122,9 @@ func makeCommandInfo(workingDirectory string, wrapper []string, commandTimeout t
 		var exitCode int
 		cmdStdout, cmdStdoutSize, cmdStderr, cmdStderrSize, err := commandline.Execute(
 			ctx, query.Payload,
-			commandline.WithWrapper(wrapper),
+			commandline.WithWrapper(config.wrapper),
 			commandline.WithOutputLimit(outputLimit),
-			commandline.WithWorkingDirectory(workingDirectory))
+			commandline.WithWorkingDirectory(config.workingDirectory))
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			extraInfo = ctxErr.Error()
 		} else if err != nil {
