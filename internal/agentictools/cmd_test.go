@@ -133,7 +133,7 @@ func TestCleanPath(t *testing.T) {
 func TestCommandToolAppliesTimeout(t *testing.T) {
 	t.Parallel()
 
-	tool := MakeCommandTool(t.TempDir(), t.TempDir(), 200*time.Millisecond, 0)
+	tool := MakeCommandTool(t.TempDir(), t.TempDir(), nil, 200*time.Millisecond, 0)
 
 	start := time.Now()
 	resp, err := tool.Run(context.Background(), fantasy.ToolCall{Input: `{"payload":["sleep","5"]}`})

@@ -16,8 +16,8 @@ import (
 	"code.andersonlizarazo.com/agent/internal/commandline"
 )
 
-func MakeCommandTool(workingDirectory string, homeDirectory string, timeout time.Duration, maxOutputBytes uint32) fantasy.AgentTool {
-	return fantasy.NewAgentTool("command", fmt.Sprintf("execute the given command on %q", cleanPath(workingDirectory, homeDirectory)), makeCommandInfo(workingDirectory, timeout, maxOutputBytes))
+func MakeCommandTool(workingDirectory, homeDirectory string, wrapper []string, timeout time.Duration, maxOutputBytes uint32) fantasy.AgentTool {
+	return fantasy.NewAgentTool("command", fmt.Sprintf("execute the given command on %q", cleanPath(workingDirectory, homeDirectory)), makeCommandInfo(workingDirectory, wrapper, timeout, maxOutputBytes))
 }
 
 func cleanPath(path string, homeDir string) string {
@@ -48,7 +48,7 @@ type commandQuery struct {
 	Payload []string `json:"payload" description:"command & args"`
 }
 
-func makeCommandInfo(workingDirectory string, commandTimeout time.Duration, maxCommandOutputBytes uint32) func(context.Context, commandQuery, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func makeCommandInfo(workingDirectory string, wrapper []string, commandTimeout time.Duration, maxCommandOutputBytes uint32) func(context.Context, commandQuery, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	return func(ctx context.Context, query commandQuery, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		if len(query.Payload) == 0 {
 			return fantasy.NewTextResponse(makeCommandOutput("", false, "", false, 0, "payload must name a program to run")), nil
@@ -67,7 +67,11 @@ func makeCommandInfo(workingDirectory string, commandTimeout time.Duration, maxC
 
 		var extraInfo string
 		var exitCode int
-		cmdStdout, cmdStdoutSize, cmdStderr, cmdStderrSize, err := commandline.Execute(ctx, query.Payload, commandline.WithOutputLimit(outputLimit), commandline.WithWorkingDirectory(workingDirectory))
+		cmdStdout, cmdStdoutSize, cmdStderr, cmdStderrSize, err := commandline.Execute(
+			ctx, query.Payload,
+			commandline.WithWrapper(wrapper),
+			commandline.WithOutputLimit(outputLimit),
+			commandline.WithWorkingDirectory(workingDirectory))
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			extraInfo = ctxErr.Error()
 		} else if err != nil {

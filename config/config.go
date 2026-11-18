@@ -30,6 +30,9 @@ type Config struct {
 		ShellTimeout        uint32 `toml:"shell_timeout"`
 		MaxShellOutputBytes uint32 `toml:"max_shell_output_bytes"`
 	} `toml:"guardrail"`
+	CommandLine struct {
+		Wrapper []string `toml:"wrapper"`
+	} `toml:"command_line"`
 	OpenAI struct {
 		ReasoningEffort openai.ReasoningEffort `toml:"reasoning_effort"`
 	} `toml:"openai"`

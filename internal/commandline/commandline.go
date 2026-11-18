@@ -21,12 +21,15 @@ func Execute(ctx context.Context, command []string, opts ...ExecuteOption) (stdo
 
 	executeOptions := executeOption{
 		outputLimit: -1,
+		wrapper:     []string{},
 		teeStdout:   io.Discard,
 		teeStderr:   io.Discard,
 	}
 	for _, apply := range opts {
 		apply(&executeOptions)
 	}
+
+	command = append(executeOptions.wrapper, command...)
 
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 
@@ -110,6 +113,7 @@ type ExecuteOption func(*executeOption)
 
 type executeOption struct {
 	workingDirectory string
+	wrapper          []string
 	outputLimit      int64
 	teeStdout        io.Writer
 	teeStderr        io.Writer
@@ -124,6 +128,12 @@ func WithOutputLimit(limit int64) ExecuteOption {
 func WithWorkingDirectory(path string) ExecuteOption {
 	return func(o *executeOption) {
 		o.workingDirectory = path
+	}
+}
+
+func WithWrapper(command []string) ExecuteOption {
+	return func(o *executeOption) {
+		o.wrapper = command
 	}
 }
 

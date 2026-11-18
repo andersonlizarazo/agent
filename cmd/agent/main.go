@@ -126,6 +126,7 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 			agentictools.MakeCommandTool(
 				cwd,
 				homeDir,
+				configDefault.CommandLine.Wrapper,
 				time.Duration(configDefault.Guardrail.ShellTimeout)*time.Millisecond,
 				configDefault.Guardrail.MaxShellOutputBytes,
 			),

@@ -15,6 +15,48 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+type toolCallRequest struct {
+	Messages []struct {
+		Content string `json:"content"`
+		Role    string `json:"role"`
+	} `json:"messages"`
+}
+
+func makeEnv(t *testing.T, baseURL string, configData config.Config, privateData config.ConfigPrivate) func(string) string {
+	t.Helper()
+
+	tempDir := t.TempDir()
+
+	configData.OpenAI.ReasoningEffort = openai.ReasoningEffortLow
+
+	configBytes, err := toml.Marshal(configData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "config.toml"), configBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	privateData.OpenAI.BaseURL = baseURL
+	privateData.OpenAI.LanguageModel = "test"
+
+	privateBytes, err := toml.Marshal(privateData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "private.toml"), privateBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	return func(key string) string {
+		if key == config.EnvAgentConfigDir {
+			return tempDir
+		}
+
+		return ""
+	}
+}
+
 func TestBasicLoop(t *testing.T) {
 	t.Parallel()
 
@@ -83,6 +125,67 @@ func TestBasicToolCall(t *testing.T) {
 	wantReqLen := 2 + 1 // Two user requests + the tool call.
 	if gotReqLen != wantReqLen {
 		t.Errorf("got: %d, want: %d", gotReqLen, wantReqLen)
+	}
+}
+
+func TestToolCallWrapper(t *testing.T) {
+	t.Parallel()
+
+	server := testserver.New(
+		testserver.Reply{
+			ToolCalls: []testserver.ToolCall{
+				{
+					ID:        "0",
+					Name:      "command",
+					Arguments: `{"payload": ["test"]}`,
+				},
+			},
+		},
+	)
+
+	var configData config.Config
+	configData.CommandLine.Wrapper = []string{"printf", "->%s<-"}
+	getenv := makeEnv(t, server.URL, configData, config.ConfigPrivate{})
+
+	stdin := bytes.NewBufferString("test")
+	if err := do([]string{"test-agent"}, getenv, stdin, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	requests := server.Requests()
+	gotReqLen := len(requests)
+	wantReqLen := 2
+	if gotReqLen != wantReqLen {
+		t.Errorf("got: %d, want: %d", gotReqLen, wantReqLen)
+	}
+
+	toolCallAnswerRaw := requests[1]
+
+	var toolCall toolCallRequest
+	if err := json.Unmarshal(toolCallAnswerRaw, &toolCall); err != nil {
+		t.Fatal(err)
+	}
+
+	messages := toolCall.Messages
+
+	gotMsgLen := len(messages)
+	wantMsgLen := 3
+	if gotMsgLen != wantMsgLen {
+		t.Errorf("got: %d, want: %d", gotMsgLen, wantMsgLen)
+	}
+
+	msg := messages[2]
+
+	gotMsgRole := msg.Role
+	wantMsgRole := "tool"
+	if gotMsgRole != wantMsgRole {
+		t.Errorf("got: %q, want: %q", gotMsgRole, wantMsgRole)
+	}
+
+	gotMsgContent := msg.Content
+	wantMsgContent := "->test<-"
+	if gotMsgContent != wantMsgContent {
+		t.Errorf("got: %q, want: %q", gotMsgContent, wantMsgContent)
 	}
 }
 
@@ -158,41 +261,6 @@ func TestToolCallMaxBytes(t *testing.T) {
 	wantToolAnswer := "1234\n[harness: output was truncated]"
 	if gotToolAnswer != wantToolAnswer {
 		t.Errorf("got: %q, want: %q", gotToolAnswer, wantToolAnswer)
-	}
-}
-
-func makeEnv(t *testing.T, baseURL string, configData config.Config, privateData config.ConfigPrivate) func(string) string {
-	t.Helper()
-
-	tempDir := t.TempDir()
-
-	configData.OpenAI.ReasoningEffort = openai.ReasoningEffortLow
-
-	configBytes, err := toml.Marshal(configData)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tempDir, "config.toml"), configBytes, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	privateData.OpenAI.BaseURL = baseURL
-	privateData.OpenAI.LanguageModel = "test"
-
-	privateBytes, err := toml.Marshal(privateData)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tempDir, "private.toml"), privateBytes, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	return func(key string) string {
-		if key == config.EnvAgentConfigDir {
-			return tempDir
-		}
-
-		return ""
 	}
 }
 
@@ -288,13 +356,6 @@ func TestToolCallSignalledChild(t *testing.T) {
 	if strings.Contains(gotToolAnswer, "[harness: exit code -1]") {
 		t.Errorf("got: %q, want no exit code for a signalled child", gotToolAnswer)
 	}
-}
-
-type toolCallRequest struct {
-	Messages []struct {
-		Content string `json:"content"`
-		Role    string `json:"role"`
-	} `json:"messages"`
 }
 
 // TestToolCallEmptyPayload pins the empty-argv case: when the model emits an
