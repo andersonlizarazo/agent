@@ -27,22 +27,6 @@ func main() {
 }
 
 func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) error {
-	flagSet := flag.NewFlagSet(filepath.Base(args[0]), flag.ContinueOnError)
-	flagSet.SetOutput(stderr)
-
-	var debugFlag, primeFlag string
-
-	flagSet.StringVar(&debugFlag, "debug", "", "print loaded configuration and exit")
-	flagSet.StringVar(&primeFlag, "prime", "", "prepend a 'prime' prompt in the first message")
-
-	err := flagSet.Parse(args[1:])
-	if errors.Is(err, flag.ErrHelp) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
 	configDir, err := config.Directory(getenv)
 	if err != nil {
 		return err
@@ -62,8 +46,26 @@ func do(args []string, getenv func(string) string, stdin io.Reader, stdout, stde
 		return err
 	}
 
+	flagSet := flag.NewFlagSet(filepath.Base(args[0]), flag.ContinueOnError)
+	flagSet.SetOutput(stderr)
+
+	var debugFlag string
+	flagSet.StringVar(&debugFlag, "debug", "", "print loaded configuration and exit")
+
+	var systemPromptFlag, primeFlag string
+	flagSet.StringVar(&systemPromptFlag, "system-prompt", configDefault.Instruction.SystemPromptDir, "load a system prompt from the specified path")
+	flagSet.StringVar(&primeFlag, "prime", "", "prepend a 'prime' prompt in the first message")
+
+	err = flagSet.Parse(args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
 	var systemPrompt string
-	if systemPromptDir := configDefault.Instruction.SystemPromptDir; systemPromptDir != "" {
+	if systemPromptDir := systemPromptFlag; systemPromptDir != "" {
 		systemPrompt, err = makePrompt(os.DirFS(systemPromptDir).(fs.ReadDirFS))
 		if err != nil {
 			return err
